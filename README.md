@@ -1,8 +1,8 @@
-# Trading Bot (Binance + Pepperstone/MT5)
+# Trading Bot (Binance + Pepperstone/cTrader Open API)
 
 Production-ready, modular Python trading bot for multi-market trading:
 - Crypto via Binance (ccxt)
-- FX/CFDs via Pepperstone (MetaTrader5 adapter or REST-simulated adapter)
+- FX/CFDs via Pepperstone (cTrader Open API adapter)
 
 Includes: adapters/connectors, multiple strategies, indicators, backtester, paper/live engine, logging/metrics, Docker, CI, and tests.
 
@@ -12,7 +12,7 @@ WARNING & DISCLAIMER
 - Default mode is dry-run for any live adapter.
 
 ## Features
-- Clean architecture with adapters for brokers (`ccxt` for Binance; MT5 + REST-like example for Pepperstone).
+- Clean architecture with adapters for brokers (`ccxt` for Binance; cTrader Open API for Pepperstone).
 - Strategy framework with plugins: Bollinger, EMA cross, Support/Resistance, ATR trailing stop, basic ICT primitives.
 - Backtester with slippage, commissions, stop handling, and performance metrics (CAGR, Sharpe, MaxDD, DD Duration, Calmar, WinRate, Profit Factor, Expectancy, Trades).
 - Walk-forward/cross-validation basic utilities.
@@ -38,7 +38,6 @@ trading-bot/
 │  ├─ app/
 │  │  ├─ core/
 │  │  │  ├─ engine.py
-│  │  │  ├─ scheduler.py
 │  │  ├─ exchanges/
 │  │  │  ├─ base_adapter.py
 │  │  │  ├─ binance_adapter.py
@@ -60,6 +59,7 @@ trading-bot/
 │  │  │  ├─ logging_config.py
 │  │  │  ├─ config_loader.py
 │  │  │  ├─ kill_switch.py
+│  │  │  ├─ metrics_server.py
 ├─ tests/
 │  ├─ test_indicators.py
 │  ├─ test_strategies.py
@@ -74,19 +74,19 @@ trading-bot/
 ## Setup
 1) Python 3.10+
 2) Create and activate venv
-```
+```bash
 python -m venv .venv
 source .venv/bin/activate
 ```
 3) Install dependencies
-```
+```bash
 pip install -r requirements.txt
 ```
 4) Configure settings in `config.yaml` (or via env). Copy `.env.example` to `.env` and fill values.
 
 ## Docker
 Build and run:
-```
+```bash
 docker compose up --build
 ```
 This starts the bot in paper/live mode as configured, plus optional services.
@@ -101,27 +101,28 @@ See `config.yaml` for:
 - `logging`: level, file path, rotation
 - `backtest`: data path, dates, commission, slippage
 
-Environment variables override config when present.
+Environment variables override config when present (e.g., `${VAR}` placeholders). `.env` is loaded automatically.
 
 ## Usage
 - Backtest BTC/USDT short sample:
-```
+```bash
 python src/main.py --mode backtest --config config.yaml --symbol BTC/USDT --exchange binance
 ```
-- Papertrade EUR/USD with Pepperstone (REST-sim adapter):
-```
+- Papertrade EUR/USD with Pepperstone (cTrader Open API adapter):
+```bash
 python src/main.py --mode paper --config config.yaml --symbol EUR/USD --exchange pepperstone
 ```
-- Live (dry-run default=true). You must explicitly set dry_run=false to send real orders (at your own risk):
-```
-python src/main.py --mode live --config config.yaml --symbol BTC/USDT --exchange binance --dry-run true
+- Live: dry-run is enabled by default to avoid sending real orders. To send real orders, set `--dry-run false` (at your own risk):
+```bash
+python src/main.py --mode live --config config.yaml --symbol BTC/USDT --exchange binance --dry-run false
 ```
 
 See `EXAMPLE_RUNS.md` for more.
 
 ## Pepperstone Connectivity
-- MT5: uses the `MetaTrader5` Python package. Requires installed MetaTrader 5 terminal and authorized login. Fill credentials in config. This adapter maps to the common interface: connect, get_ohlcv, place/modify/cancel orders, balance, positions.
-- REST: As Pepperstone doesn’t provide a public REST for retail MT5 accounts, a simulated REST adapter is provided to demonstrate the interface (could be replaced by a bridge or third-party API). It is safe for paper/backtest.
+- cTrader Open API: uses `ctrader-open-api` (see `requirements.txt`). Configure credentials under `exchanges.pepperstone.ctrader` in `config.yaml`:
+  - `access_token`, `account_id`, `environment`, `client_id`, `client_secret` (can be set via `.env`).
+  The adapter implements a common interface: `connect`, `get_ohlcv`, order placement/modification/cancel, balances and positions.
 
 ## Metrics & Logging
 - Logs: structured, rotating file. Configure via `config.yaml`.
