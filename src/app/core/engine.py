@@ -57,7 +57,7 @@ class TradingEngine:
         self.exchange.connect()
         try:
             while True:
-                ohlcv = self.exchange.get_ohlcv(self.symbol, self.timeframe, limit=300)
+                ohlcv = self.exchange.get_ohlcv(self.symbol, self.timeframe)
                 for strat in self.strategies:
                     signals = strat.generate_signals(ohlcv)
                     # Simple example: act on last signal

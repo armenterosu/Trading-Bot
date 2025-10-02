@@ -10,18 +10,23 @@ from loguru import logger
 import backtrader as bt
 import importlib
 import pkgutil
-import numpy as np
 import os
 
 from app.utils.metrics import compute_metrics, save_metrics_csv
 
 import os as _os
 import ccxt
+from pathlib import Path
 try:
     # As requested by user: simple Client API
     from ctrader_open_api import Client as CTraderClient  # type: ignore
 except Exception:  # pragma: no cover
     CTraderClient = None  # type: ignore
+
+try:
+    from kaggle.api.kaggle_api_extended import KaggleApi  # type: ignore
+except Exception:  # pragma: no cover
+    KaggleApi = None  # type: ignore
 
 
 def _as_float(v: Any, default: float) -> float:
@@ -119,7 +124,117 @@ def _fetch_online_df(cfg: Dict[str, Any], exchange: str, symbol: str, timeframe:
         return _ccxt_binance_df(cfg, symbol, timeframe, limit)
     if exchange == 'pepperstone':
         return _ctrader_df(cfg, symbol, timeframe, limit)
+    if exchange == 'kaggle':
+        return _kaggle_df(cfg, symbol, timeframe, start, end)
     raise ValueError(f"Unknown exchange: {exchange}")
+
+
+def _kaggle_df(cfg: Dict[str, Any], symbol: str, timeframe: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
+    if KaggleApi is None:
+        raise RuntimeError("kaggle package not available. Please `pip install kaggle` in your environment.")
+
+    kg_cfg = (cfg.get('backtest', {}).get('kaggle', {}) or {})
+    dataset = kg_cfg.get('dataset') or _os.environ.get('KAGGLE_DATASET')
+    file_name = kg_cfg.get('file') or _os.environ.get('KAGGLE_FILE')
+    time_col = kg_cfg.get('time_column', 'timestamp')
+    sym_col = kg_cfg.get('symbol_column')  # optional
+    col_map = kg_cfg.get('columns', {  # allow remapping
+        'open': 'open', 'high': 'high', 'low': 'low', 'close': 'close', 'volume': 'volume'
+    })
+    # Authenticate Kaggle API
+    # Prefer repository kaggle.json if present by setting KAGGLE_CONFIG_DIR
+    repo_root = Path(__file__).resolve().parents[4] if len(Path(__file__).resolve().parents) >= 4 else Path.cwd()
+    repo_kaggle = repo_root / 'kaggle.json'
+
+    api = KaggleApi()
+    try:
+        api.authenticate()
+    except Exception as e:
+        raise RuntimeError("Failed to authenticate with Kaggle API. Ensure kaggle.json is in ~/.kaggle/ or set KAGGLE_CONFIG_DIR, or export KAGGLE_USERNAME/KAGGLE_KEY.") from e
+
+    cache_dir = Path(kg_cfg.get('cache_dir', '.cache/kaggle'))
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    local_path = cache_dir / file_name
+    if not local_path.exists():
+        try:
+            api.dataset_download_file(dataset=dataset, file_name=file_name, path=str(cache_dir), force=True)
+        except Exception as e:
+            # Try to list files to assist debugging
+            available = []
+            try:
+                files = api.dataset_list_files(dataset).files  # type: ignore
+                available = [f.name for f in files]
+            except Exception:
+                pass
+            hint = f"Available files: {available}" if available else ""
+            raise RuntimeError(
+                "Failed to download Kaggle dataset file. Possible causes: (1) Invalid credentials; (2) You must accept the dataset's terms on Kaggle website; (3) The dataset/file name is incorrect; (4) The dataset is private and your account lacks access. " + hint
+            ) from e
+        # Kaggle may save as .zip
+        zip_path = cache_dir / f"{file_name}.zip"
+        if zip_path.exists():
+            import zipfile
+            with zipfile.ZipFile(zip_path) as z:
+                z.extractall(cache_dir)
+            zip_path.unlink(missing_ok=True)
+
+    # Load CSV/Parquet
+    if str(local_path).lower().endswith('.parquet'):
+        df = pd.read_parquet(local_path)
+    else:
+        # Auto-detect delimiter (handles semicolon ';' files) using Python engine's sniffer
+        df = pd.read_csv(local_path, sep=None, engine='python')
+    # Normalize column names (trim whitespace)
+    df.columns = df.columns.astype(str).str.strip()
+
+    # Optional filter by symbol
+    if sym_col and sym_col in df.columns:
+        # map symbol like BTC/USDT -> BTCUSDT or direct equals
+        candidates = {symbol, symbol.replace('/', ''), symbol.replace('-', ''), symbol.split(':')[-1]}
+        df = df[df[sym_col].astype(str).isin(candidates)]
+
+    # Normalize datetime index
+    if time_col not in df.columns:
+        raise ValueError(f"Time column '{time_col}' not found in Kaggle file")
+    # Try to infer epoch unit if numeric
+    raw_time = df[time_col]
+    if pd.api.types.is_numeric_dtype(raw_time):
+        series = pd.to_numeric(raw_time, errors='coerce')
+        # Heuristic: seconds ~1e9..1e10, millis ~1e12..1e13
+        median = series.dropna().median()
+        unit = 's' if median < 1e11 else 'ms'
+        ts = pd.to_datetime(series, unit=unit, errors='coerce')
+    else:
+        ts = pd.to_datetime(raw_time, errors='coerce')
+    df = df.loc[ts.notna()].copy()
+    df.index = pd.to_datetime(df[time_col])
+
+    # Rename columns to expected schema
+    missing = [k for k, v in col_map.items() if v not in df.columns]
+    if missing:
+        raise ValueError(f"Columns missing in Kaggle file: {missing}. Provided map: {col_map}")
+    out = pd.DataFrame(index=df.index)
+    for k, v in col_map.items():
+        out[k] = pd.to_numeric(df[v], errors='coerce')
+    out = out.dropna().sort_index()
+
+    # Date filtering with fallback if out-of-range
+    filtered = out.loc[(out.index >= start) & (out.index <= end)]
+    if filtered.empty:
+        logger.warning("Kaggle date window returned no rows; falling back to full dataset range")
+        filtered = out
+
+    # Resample to requested timeframe if needed (e.g., 1h, 15m)
+    tf_map = {'1m': '1min', '5m': '5min', '15m': '15min', '30m': '30min', '1h': '1H', '4h': '4H', '1d': '1D'}
+    rule = tf_map.get(timeframe)
+    if rule:
+        ohlc = filtered[['open','high','low','close']].resample(rule, label='right', closed='right').agg({
+            'open':'first','high':'max','low':'min','close':'last'
+        })
+        vol = filtered[['volume']].resample(rule, label='right', closed='right').sum()
+        res = pd.concat([ohlc, vol], axis=1).dropna()
+        return res
+    return filtered
 
 
 def _discover_strategy_names() -> List[str]:
@@ -206,7 +321,6 @@ class BacktraderBacktester:
         # Fetch online data
         start = pd.to_datetime(self.bt_cfg.get("start_date")) if self.bt_cfg.get("start_date") else pd.Timestamp.utcnow() - pd.Timedelta(days=30)
         end = pd.to_datetime(self.bt_cfg.get("end_date")) if self.bt_cfg.get("end_date") else pd.Timestamp.utcnow()
-        print(start, end)
         df = _fetch_online_df(self.cfg, exchange, symbol, timeframe, start, end)
         if df is None or df.empty:
             raise ValueError("Failed to fetch online OHLCV for Backtrader")

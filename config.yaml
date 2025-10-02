@@ -52,9 +52,20 @@ logging:
   retention_days: 7
 
 backtest:
-  data_path: "${BT_DATA_PATH}"
-  start_date: "${BT_START_DATE}"
-  end_date: "${BT_END_DATE}"
+  data_path: ${BT_DATA_PATH}
+  start_date: ${BT_START_DATE}
+  end_date: ${BT_END_DATE}
   commission: ${BT_COMMISSION}
   slippage: ${BT_SLIPPAGE}
-  metrics_path: "${BT_METRICS_PATH}"
+  metrics_path: ${BT_METRICS_PATH}
+  kaggle:
+    dataset: "novandraanugrah/xauusd-gold-price-historical-data-2004-2024"
+    file: "XAU_15m_data.csv"
+    time_column: "Date"
+    symbol_column: ""   # o no lo declares si no aplica
+    columns:
+      open: "Open"
+      high: "High"
+      low: "Low"
+      close: "Close"
+      volume: "Volume"

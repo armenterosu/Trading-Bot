@@ -14,4 +14,4 @@ python src/main.py \
   --config config.yaml \
   --exchange "binance" \
   --symbol "${SYMBOL_BINANCE}" \
-  --timeframe "1h"
+  --timeframe "15m"
