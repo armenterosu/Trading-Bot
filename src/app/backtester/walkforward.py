@@ -4,7 +4,7 @@ from typing import Dict, Any, List, Tuple
 from copy import deepcopy
 import pandas as pd
 
-from app.backtester.backtest import Backtester
+from src.app.backtester.backtest import Backtester
 
 
 def time_splits(df: pd.DataFrame, n_splits: int = 3) -> List[Tuple[pd.Timestamp, pd.Timestamp]]:

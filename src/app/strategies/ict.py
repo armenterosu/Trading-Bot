@@ -30,11 +30,11 @@ def swing_structure(df: pd.DataFrame, lookback: int = 10) -> pd.Series:
     # very simple: uptrend if higher highs and higher lows vs lookback
     hh = df['high'] > df['high'].rolling(lookback).max().shift(1)
     hl = df['low'] > df['low'].rolling(lookback).min().shift(1)
-    up = (hh & hl).astype(int)
-    down = (~up).astype(int)
-    trend = pd.Series(0, index=df.index)
-    trend[up] = 1
-    trend[down & ~up] = -1
+    up = (hh & hl)  # boolean mask
+    down = ~up      # boolean mask
+    trend = pd.Series(0, index=df.index, dtype=int)
+    trend.loc[up] = 1
+    trend.loc[down] = -1
     return trend
 
 

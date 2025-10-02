@@ -13,9 +13,9 @@ from app.utils.config_loader import load_config
 from app.utils.logging_config import setup_logging
 from app.utils.kill_switch import DrawdownKillSwitch
 from app.core.engine import TradingEngine
-from app.backtester.backtest import Backtester
 from threading import Thread
 from app.utils.metrics_server import create_app
+from app.backtester.backtrader_engine import BacktraderBacktester
 
 
 def parse_args() -> argparse.Namespace:
@@ -27,6 +27,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--timeframe", required=False, default="1h")
     parser.add_argument("--dry-run", dest="dry_run", default="true")
     parser.add_argument("--metrics", dest="metrics", default="false")
+    parser.add_argument("--strategies", dest="strategies", default="", help="Comma-separated strategy names to backtest (e.g. ema_cross,bollinger). Empty = all.")
     return parser.parse_args()
 
 
@@ -64,15 +65,26 @@ def main() -> None:
         t.start()
 
     if args.mode == "backtest":
-        backtester = Backtester(config=cfg)
+        backtester = BacktraderBacktester(config=cfg)
+        # Parse strategies list (optional)
+        strategies = [s.strip() for s in args.strategies.split(",") if s.strip()] or None
         report = backtester.run(
             symbol=args.symbol,
             exchange=args.exchange,
             timeframe=args.timeframe,
+            strategies=strategies,
         )
         print("Backtest Summary:")
-        for k, v in report.items():
-            print(f" - {k}: {v}")
+        # If multiple strategies, print per-strategy compact summaries
+        if isinstance(report, dict):
+            for strat, summary in report.items():
+                final_eq = summary.get("FinalEquity")
+                cagr = summary.get("CAGR")
+                sharpe = summary.get("Sharpe")
+                print(f" - {strat}: FinalEquity={final_eq} CAGR={cagr} Sharpe={sharpe}")
+        else:
+            for k, v in report.items():
+                print(f" - {k}: {v}")
         return
 
     engine = create_engine(cfg, args)

@@ -5,11 +5,11 @@ import time
 import importlib
 from loguru import logger
 
-from src.app.exchanges.base_adapter import ExchangeAdapter
-from src.app.exchanges.binance_adapter import BinanceAdapter
-from src.app.exchanges.pepperstone_adapter import PepperstoneAdapter
-from src.app.strategies.base_strategy import BaseStrategy
-from src.app.utils.kill_switch import DrawdownKillSwitch
+from app.exchanges.base_adapter import ExchangeAdapter
+from app.exchanges.binance_adapter import BinanceAdapter
+from app.exchanges.pepperstone_adapter import PepperstoneAdapter
+from app.strategies.base_strategy import BaseStrategy
+from app.utils.kill_switch import DrawdownKillSwitch
 
 
 class TradingEngine:

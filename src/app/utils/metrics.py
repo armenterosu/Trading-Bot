@@ -8,7 +8,7 @@ import pandas as pd
 def compute_metrics(equity_curve: pd.Series, rf: float = 0.0) -> Dict[str, float]:
     returns = equity_curve.pct_change().dropna()
     if returns.empty:
-        return {"CAGR": 0.0, "Sharpe": 0.0, "MaxDD": 0.0, "DD_Duration": 0.0,
+        return {"CAGR": 0.0, "Sharpe": 0.0, "Sortino": 0.0, "MaxDD": 0.0, "DD_Duration": 0.0,
                 "Calmar": 0.0, "WinRate": 0.0, "ProfitFactor": 0.0, "Expectancy": 0.0,
                 "Trades": 0}
 
@@ -20,6 +20,11 @@ def compute_metrics(equity_curve: pd.Series, rf: float = 0.0) -> Dict[str, float
 
     # Sharpe (daily/periodic approximated)
     sharpe = (returns.mean() - rf) / (returns.std() + 1e-12) * np.sqrt(252)
+
+    # Sortino (downside deviation)
+    downside = returns[returns < 0]
+    dd_std = downside.std() if not downside.empty else 0.0
+    sortino = (returns.mean() - rf) / (dd_std + 1e-12) * np.sqrt(252)
 
     # Drawdown metrics
     roll_max = equity_curve.cummax()
@@ -41,6 +46,7 @@ def compute_metrics(equity_curve: pd.Series, rf: float = 0.0) -> Dict[str, float
     return {
         "CAGR": float(cagr),
         "Sharpe": float(sharpe),
+        "Sortino": float(sortino),
         "MaxDD": float(maxdd),
         "DD_Duration": float(max_dur),
         "Calmar": float(cagr / (maxdd + 1e-12)),
