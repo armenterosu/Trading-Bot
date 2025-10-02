@@ -1,0 +1,23 @@
+<component name="InspectionProjectProfileManager">
+  <profile version="1.0">
+    <option name="myName" value="Project Default" />
+    <inspection_tool class="PyPackageRequirementsInspection" enabled="true" level="WARNING" enabled_by_default="true">
+      <option name="ignoredPackages">
+        <list>
+          <option value="Django" />
+          <option value="eventlet" />
+          <option value="gunicorn" />
+          <option value="django-filter" />
+          <option value="djangorestframework" />
+          <option value="django-cors-headers" />
+          <option value="django-model-utils" />
+          <option value="django-environ" />
+          <option value="requests" />
+          <option value="pycurl" />
+          <option value="psycopg2-binary" />
+          <option value="mysqlclient" />
+        </list>
+      </option>
+    </inspection_tool>
+  </profile>
+</component>

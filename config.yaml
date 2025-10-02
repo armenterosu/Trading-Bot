@@ -1,0 +1,60 @@
+global:
+  timezone: "UTC"
+  base_currency: "USD"
+  starting_capital: 10000
+
+exchanges:
+  binance:
+    api_key: "${BINANCE_API_KEY}"
+    api_secret: "${BINANCE_API_SECRET}"
+    testnet: true
+    default_market: "spot"
+  pepperstone:
+    ctrader:
+      access_token: "${CTRADER_ACCESS_TOKEN}"
+      account_id: "${CTRADER_ACCOUNT_ID}"  # numeric
+      environment: "${CTRADER_ENVIRONMENT}"
+      client_id: "${CTRADER_CLIENT_ID}"
+      client_secret: "${CTRADER_CLIENT_SECRET}"
+
+indicators:
+  ema_fast: ${IND_EMA_FAST}
+  ema_slow: ${IND_EMA_SLOW}
+  ema_trend: ${IND_EMA_TREND}
+  bollinger_period: ${IND_BB_PERIOD}
+  bollinger_k: ${IND_BB_K}
+  atr_period: ${IND_ATR_PERIOD}
+  rsi_period: ${IND_RSI_PERIOD}
+
+strategies:
+  enabled:
+    - bollinger
+  ema_cross:
+    fast: ${IND_EMA_FAST}
+    slow: ${IND_EMA_SLOW}
+    trend: ${IND_EMA_TREND}
+  bollinger:
+    period: ${IND_BB_PERIOD}
+    k: ${IND_BB_K}
+  support_resistance:
+    pivot_lookback: ${IND_PIVOT_LOOKBACK}
+  ict:
+    fvg_min_size_ticks: ${IND_ICT_FVG_MIN_TICKS}
+
+risk:
+  max_risk_per_trade: ${RISK_MAX_PER_TRADE}
+  max_positions: ${RISK_MAX_POSITIONS}
+  max_drawdown_limit: ${RISK_MAX_DD}
+
+logging:
+  level: "INFO"
+  file: "logs/bot.log"
+  retention_days: 7
+
+backtest:
+  data_path: "${BT_DATA_PATH}"
+  start_date: "${BT_START_DATE}"
+  end_date: "${BT_END_DATE}"
+  commission: ${BT_COMMISSION}
+  slippage: ${BT_SLIPPAGE}
+  metrics_path: "${BT_METRICS_PATH}"
