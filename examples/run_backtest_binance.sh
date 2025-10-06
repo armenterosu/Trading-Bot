@@ -13,5 +13,5 @@ python src/main.py \
   --mode backtest \
   --config config.yaml \
   --exchange "binance" \
-  --symbol "${SYMBOL_BINANCE}" \
-  --timeframe "15m"
+  --symbol "${SYMBOL}" \
+  --timeframe "1d"

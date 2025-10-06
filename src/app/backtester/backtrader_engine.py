@@ -12,7 +12,7 @@ import importlib
 import pkgutil
 import os
 
-from app.utils.metrics import compute_metrics, save_metrics_csv
+from app.utils.metrics import compute_metrics, save_metrics_csv, generate_metrics_images
 
 import os as _os
 import ccxt
@@ -34,6 +34,28 @@ def _as_float(v: Any, default: float) -> float:
         return float(v)
     except Exception:
         return default
+
+
+def _get_nested(d: Dict[str, Any], *keys: Any) -> Any:
+    """Safely navigate nested dicts from Backtrader analyzers.
+
+    Handles cases where TradeAnalyzer may have slightly different nesting per version.
+    """
+    cur: Any = d
+    for k in keys:
+        if not isinstance(cur, dict):
+            return None
+        cur = cur.get(k)
+    return cur
+
+
+def _num_or_none(v: Any) -> Optional[float]:
+    try:
+        if v is None:
+            return None
+        return float(v)
+    except Exception:
+        return None
 
 
 def _ccxt_binance_df(cfg: Dict[str, Any], symbol: str, timeframe: str, limit: int) -> pd.DataFrame:
@@ -129,114 +151,6 @@ def _fetch_online_df(cfg: Dict[str, Any], exchange: str, symbol: str, timeframe:
     raise ValueError(f"Unknown exchange: {exchange}")
 
 
-def _kaggle_df(cfg: Dict[str, Any], symbol: str, timeframe: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
-    if KaggleApi is None:
-        raise RuntimeError("kaggle package not available. Please `pip install kaggle` in your environment.")
-
-    kg_cfg = (cfg.get('backtest', {}).get('kaggle', {}) or {})
-    dataset = kg_cfg.get('dataset') or _os.environ.get('KAGGLE_DATASET')
-    file_name = kg_cfg.get('file') or _os.environ.get('KAGGLE_FILE')
-    time_col = kg_cfg.get('time_column', 'timestamp')
-    sym_col = kg_cfg.get('symbol_column')  # optional
-    col_map = kg_cfg.get('columns', {  # allow remapping
-        'open': 'open', 'high': 'high', 'low': 'low', 'close': 'close', 'volume': 'volume'
-    })
-    # Authenticate Kaggle API
-    # Prefer repository kaggle.json if present by setting KAGGLE_CONFIG_DIR
-    repo_root = Path(__file__).resolve().parents[4] if len(Path(__file__).resolve().parents) >= 4 else Path.cwd()
-    repo_kaggle = repo_root / 'kaggle.json'
-
-    api = KaggleApi()
-    try:
-        api.authenticate()
-    except Exception as e:
-        raise RuntimeError("Failed to authenticate with Kaggle API. Ensure kaggle.json is in ~/.kaggle/ or set KAGGLE_CONFIG_DIR, or export KAGGLE_USERNAME/KAGGLE_KEY.") from e
-
-    cache_dir = Path(kg_cfg.get('cache_dir', '.cache/kaggle'))
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    local_path = cache_dir / file_name
-    if not local_path.exists():
-        try:
-            api.dataset_download_file(dataset=dataset, file_name=file_name, path=str(cache_dir), force=True)
-        except Exception as e:
-            # Try to list files to assist debugging
-            available = []
-            try:
-                files = api.dataset_list_files(dataset).files  # type: ignore
-                available = [f.name for f in files]
-            except Exception:
-                pass
-            hint = f"Available files: {available}" if available else ""
-            raise RuntimeError(
-                "Failed to download Kaggle dataset file. Possible causes: (1) Invalid credentials; (2) You must accept the dataset's terms on Kaggle website; (3) The dataset/file name is incorrect; (4) The dataset is private and your account lacks access. " + hint
-            ) from e
-        # Kaggle may save as .zip
-        zip_path = cache_dir / f"{file_name}.zip"
-        if zip_path.exists():
-            import zipfile
-            with zipfile.ZipFile(zip_path) as z:
-                z.extractall(cache_dir)
-            zip_path.unlink(missing_ok=True)
-
-    # Load CSV/Parquet
-    if str(local_path).lower().endswith('.parquet'):
-        df = pd.read_parquet(local_path)
-    else:
-        # Auto-detect delimiter (handles semicolon ';' files) using Python engine's sniffer
-        df = pd.read_csv(local_path, sep=None, engine='python')
-    # Normalize column names (trim whitespace)
-    df.columns = df.columns.astype(str).str.strip()
-
-    # Optional filter by symbol
-    if sym_col and sym_col in df.columns:
-        # map symbol like BTC/USDT -> BTCUSDT or direct equals
-        candidates = {symbol, symbol.replace('/', ''), symbol.replace('-', ''), symbol.split(':')[-1]}
-        df = df[df[sym_col].astype(str).isin(candidates)]
-
-    # Normalize datetime index
-    if time_col not in df.columns:
-        raise ValueError(f"Time column '{time_col}' not found in Kaggle file")
-    # Try to infer epoch unit if numeric
-    raw_time = df[time_col]
-    if pd.api.types.is_numeric_dtype(raw_time):
-        series = pd.to_numeric(raw_time, errors='coerce')
-        # Heuristic: seconds ~1e9..1e10, millis ~1e12..1e13
-        median = series.dropna().median()
-        unit = 's' if median < 1e11 else 'ms'
-        ts = pd.to_datetime(series, unit=unit, errors='coerce')
-    else:
-        ts = pd.to_datetime(raw_time, errors='coerce')
-    df = df.loc[ts.notna()].copy()
-    df.index = pd.to_datetime(df[time_col])
-
-    # Rename columns to expected schema
-    missing = [k for k, v in col_map.items() if v not in df.columns]
-    if missing:
-        raise ValueError(f"Columns missing in Kaggle file: {missing}. Provided map: {col_map}")
-    out = pd.DataFrame(index=df.index)
-    for k, v in col_map.items():
-        out[k] = pd.to_numeric(df[v], errors='coerce')
-    out = out.dropna().sort_index()
-
-    # Date filtering with fallback if out-of-range
-    filtered = out.loc[(out.index >= start) & (out.index <= end)]
-    if filtered.empty:
-        logger.warning("Kaggle date window returned no rows; falling back to full dataset range")
-        filtered = out
-
-    # Resample to requested timeframe if needed (e.g., 1h, 15m)
-    tf_map = {'1m': '1min', '5m': '5min', '15m': '15min', '30m': '30min', '1h': '1H', '4h': '4H', '1d': '1D'}
-    rule = tf_map.get(timeframe)
-    if rule:
-        ohlc = filtered[['open','high','low','close']].resample(rule, label='right', closed='right').agg({
-            'open':'first','high':'max','low':'min','close':'last'
-        })
-        vol = filtered[['volume']].resample(rule, label='right', closed='right').sum()
-        res = pd.concat([ohlc, vol], axis=1).dropna()
-        return res
-    return filtered
-
-
 def _discover_strategy_names() -> List[str]:
     strategies_dir = __import__('os').path.abspath(__import__('os').path.join(__import__('os').path.dirname(__file__), "..", "strategies"))
     names: List[str] = []
@@ -292,9 +206,14 @@ class _SignalWrapperStrategy(bt.Strategy):
                 else:
                     self.order = self.sell(size=qty)
         else:
-            # simple flat on opposite signal
-            if (self.position.size > 0 and sig < 0) or (self.position.size < 0 and sig > 0):
+            # Close on opposite signal or neutral signal
+            if sig == 0 or (self.position.size > 0 and sig < 0) or (self.position.size < 0 and sig > 0):
                 self.close()
+    
+    def stop(self):
+        # Close any open positions at the end of backtest
+        if self.position.size != 0:
+            self.close()
 
 
 class _EquityCurveAnalyzer(bt.Analyzer):
@@ -373,7 +292,46 @@ class BacktraderBacktester:
             returns = analyzers.returns.get_analysis() if hasattr(analyzers, 'returns') else {}
             cagr = returns.get('rnorm100')  # normalized annual return (%)
             trades = analyzers.trades.get_analysis() if hasattr(analyzers, 'trades') else {}
-            total_trades = (trades.get('total', {}) or {}).get('total', None)
+            
+            # Debug: log raw trades analyzer output
+            logger.debug(f"TradeAnalyzer raw output: {trades}")
+            
+            # Trade stats (robust to analyzer structure differences)
+            # Backtrader TradeAnalyzer structure:
+            # trades = {
+            #   'total': {'total': N, 'open': X, 'closed': Y},
+            #   'won': {'total': W, 'pnl': {...}},
+            #   'lost': {'total': L, 'pnl': {...}},
+            #   'long': {'total': LT, 'won': LW, 'lost': LL, 'pnl': {...}},
+            #   'short': {'total': ST, 'won': SW, 'lost': SL, 'pnl': {...}}
+            # }
+            
+            total_trades = _get_nested(trades, 'total', 'total')
+            if total_trades is None:
+                # Fallback: if 'total' is just a number
+                total_val = trades.get('total')
+                total_trades = total_val if isinstance(total_val, (int, float)) else 0
+            
+            total_closed = _get_nested(trades, 'total', 'closed') or 0
+            wins_total = _get_nested(trades, 'won', 'total') or 0
+            losses_total = _get_nested(trades, 'lost', 'total') or 0
+
+            long_total = _get_nested(trades, 'long', 'total') or 0
+            short_total = _get_nested(trades, 'short', 'total') or 0
+            
+            # Wins/losses by direction
+            long_won = _get_nested(trades, 'long', 'won') or 0
+            short_won = _get_nested(trades, 'short', 'won') or 0
+            long_lost = _get_nested(trades, 'long', 'lost') or 0
+            short_lost = _get_nested(trades, 'short', 'lost') or 0
+
+            # Directional win rates
+            wr_long = None
+            if _num_or_none(long_total) and float(long_total) > 0 and _num_or_none(long_won) is not None:
+                wr_long = float(long_won) / float(long_total)
+            wr_short = None
+            if _num_or_none(short_total) and float(short_total) > 0 and _num_or_none(short_won) is not None:
+                wr_short = float(short_won) / float(short_total)
 
             # Build equity curve and compute professional metrics
             eq_values = analyzers.equity.get_analysis() if hasattr(analyzers, 'equity') else []
@@ -393,8 +351,34 @@ class BacktraderBacktester:
                 "ProfitFactor": prof_metrics.get("ProfitFactor"),
                 "Expectancy": prof_metrics.get("Expectancy"),
                 "NumTrades": prof_metrics.get("Trades", total_trades),
+                # Extended trade breakdown
+                "Trades_Closed": total_closed,
+                "Trades_Long": long_total,
+                "Trades_Short": short_total,
+                "Wins_Total": wins_total,
+                "Losses_Total": losses_total,
+                "Wins_Long": long_won,
+                "Losses_Long": long_lost,
+                "Wins_Short": short_won,
+                "Losses_Short": short_lost,
+                "WinRate_Long": wr_long,
+                "WinRate_Short": wr_short,
             }
-            logger.info(summary)
+            
+            # Formatted trade statistics log
+            logger.info(f"=== Backtest Results: {strat_name} ===")
+            logger.info(f"Final Equity: {pnl_final:.2f} | CAGR: {summary.get('CAGR', 0)*100:.2f}% | Sharpe: {summary.get('Sharpe', 0):.2f} | MaxDD: {summary.get('MaxDD', 0)*100:.2f}%")
+            logger.info(f"Total Trades: {total_trades} | Closed: {total_closed} | Wins: {wins_total} | Losses: {losses_total}")
+            
+            # Long trades
+            long_wr_pct = f"{wr_long*100:.1f}%" if wr_long is not None else "N/A"
+            logger.info(f"Long Trades: {long_total} | Wins: {long_won} | Losses: {long_lost} | WinRate: {long_wr_pct}")
+            
+            # Short trades
+            short_wr_pct = f"{wr_short*100:.1f}%" if wr_short is not None else "N/A"
+            logger.info(f"Short Trades: {short_total} | Wins: {short_won} | Losses: {short_lost} | WinRate: {short_wr_pct}")
+            
+            logger.info(f"Full metrics: {summary}")
             results[strat_name] = summary
 
             # Persist outputs
@@ -405,4 +389,8 @@ class BacktraderBacktester:
                 eq_series.to_csv(os.path.join(metrics_path, f"equity_{base_name}.csv"), header=["equity"])
             save_metrics_csv({k: (v if v is not None else "") for k, v in summary.items()}, os.path.join(metrics_path, f"backtest_{base_name}.csv"))
 
+        # Generate visual metric images after all strategies complete
+        logger.info("Generating metric visualization images...")
+        generate_metrics_images(metrics_path)
+        
         return results

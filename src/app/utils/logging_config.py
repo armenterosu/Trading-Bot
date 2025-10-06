@@ -7,7 +7,7 @@ import json
 import os
 
 
-def setup_logging(cfg: Dict[str, Any]) -> None:
+def setup_logging(cfg: Dict[str, Any], console: bool = True) -> None:
     logger.remove()
 
     level = cfg.get("level", "INFO")
@@ -15,7 +15,17 @@ def setup_logging(cfg: Dict[str, Any]) -> None:
     retention_days = cfg.get("retention_days", 7)
 
     os.makedirs(os.path.dirname(logfile), exist_ok=True)
-    # Log only to file (JSON), no console output
+    
+    # Add console output (human-readable)
+    if console:
+        logger.add(
+            sys.stderr,
+            level=level,
+            format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | <level>{message}</level>",
+            colorize=True,
+        )
+    
+    # Log to file (JSON)
     logger.add(
         logfile,
         level=level,
