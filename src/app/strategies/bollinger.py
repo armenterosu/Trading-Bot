@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Dict, Any
 import pandas as pd
 from .base_strategy import BaseStrategy
-from app.indicators.indicators import bollinger_bands
+from src.app.indicators.indicators import bollinger_bands
 
 
 class BollingerStrategy(BaseStrategy):

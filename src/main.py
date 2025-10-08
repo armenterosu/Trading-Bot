@@ -22,7 +22,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Multi-market Trading Bot")
     parser.add_argument("--mode", choices=["backtest", "paper", "live"], default="backtest")
     parser.add_argument("--config", default="config.yaml")
-    parser.add_argument("--exchange", choices=["binance", "pepperstone", "kaggle"], default="binance")
+    parser.add_argument("--exchange", choices=["binance", "pepperstone"], default="binance")
     parser.add_argument("--symbol", required=False, default="BTC/USDT")
     parser.add_argument("--timeframe", required=False, default="1h")
     parser.add_argument("--dry-run", dest="dry_run", default="true")

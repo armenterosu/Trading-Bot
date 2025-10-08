@@ -1,40 +1,28 @@
 from __future__ import annotations
+
+from ..utils.data_loader import DataLoader
+
 """Backtrader-based backtesting engine.
 
-Runs each configured strategy independently over an online-fetched OHLCV
+Runs each configured strategy independently over local OHLCV data
 DataFrame by wrapping strategy signals into a Backtrader Strategy.
 """
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional, Tuple, Type, Union
 import pandas as pd
 from loguru import logger
 import backtrader as bt
-import importlib
 import pkgutil
 import os
-
-from app.utils.metrics import compute_metrics, save_metrics_csv, generate_metrics_images
-
-import os as _os
-import ccxt
-from pathlib import Path
-try:
-    # As requested by user: simple Client API
-    from ctrader_open_api import Client as CTraderClient  # type: ignore
-except Exception:  # pragma: no cover
-    CTraderClient = None  # type: ignore
-
-try:
-    from kaggle.api.kaggle_api_extended import KaggleApi  # type: ignore
-except Exception:  # pragma: no cover
-    KaggleApi = None  # type: ignore
+import importlib
+from ..utils.metrics import compute_metrics, save_metrics_csv, generate_metrics_images
 
 
-def _as_float(v: Any, default: float) -> float:
+def _as_float(value: Any, default: float = 0.0) -> float:
+    """Safely convert a value to float with a default fallback."""
     try:
-        return float(v)
-    except Exception:
+        return float(value) if value is not None else default
+    except (ValueError, TypeError):
         return default
-
 
 def _get_nested(d: Dict[str, Any], *keys: Any) -> Any:
     """Safely navigate nested dicts from Backtrader analyzers.
@@ -58,97 +46,6 @@ def _num_or_none(v: Any) -> Optional[float]:
         return None
 
 
-def _ccxt_binance_df(cfg: Dict[str, Any], symbol: str, timeframe: str, limit: int) -> pd.DataFrame:
-    bx_cfg = (cfg.get("exchanges", {}).get("binance", {}) or {})
-    params = {
-        'apiKey': bx_cfg.get('api_key') or _os.environ.get('BINANCE_API_KEY'),
-        'secret': bx_cfg.get('api_secret') or _os.environ.get('BINANCE_API_SECRET'),
-        'enableRateLimit': True,
-        'options': {'defaultType': bx_cfg.get('default_market', 'spot')},
-    }
-    client = ccxt.binance(params)
-    if bx_cfg.get('testnet', True):
-        client.set_sandbox_mode(True)
-    data = client.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
-    df = pd.DataFrame(data, columns=["timestamp", "open", "high", "low", "close", "volume"])  # type: ignore
-    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
-    df.set_index("timestamp", inplace=True)
-    return df
-
-
-def _ctrader_df(cfg: Dict[str, Any], symbol: str, timeframe: str, count: int) -> pd.DataFrame:
-    if CTraderClient is None:
-        raise RuntimeError("ctrader-open-api not available")
-    cx = (cfg.get("exchanges", {}).get("pepperstone", {}) or {})
-    c = (cx.get("ctrader", {}) or {})
-    client_id = c.get("client_id") or _os.environ.get("CTRADER_CLIENT_ID")
-    client_secret = c.get("client_secret") or _os.environ.get("CTRADER_CLIENT_SECRET")
-    access_token = c.get("access_token") or _os.environ.get("CTRADER_ACCESS_TOKEN")
-    if not client_id or not client_secret or not access_token:
-        raise RuntimeError("Missing cTrader credentials (client_id/client_secret/access_token)")
-
-    client = CTraderClient(client_id, client_secret, access_token)  # type: ignore
-
-    # Map timeframe like "1h" -> "H1", "15m" -> "M15"
-    tf_map = {
-        '1m': 'M1', '5m': 'M5', '15m': 'M15', '30m': 'M30',
-        '1h': 'H1', '4h': 'H4', '1d': 'D1',
-    }
-    ct_tf = tf_map.get(timeframe)
-    if not ct_tf:
-        raise ValueError(f"Unsupported cTrader timeframe: {timeframe}")
-
-    # Symbols usually without slash, e.g., EURUSD
-    ct_symbol = symbol.replace('/', '')
-
-    candles = client.get_candles(symbol=ct_symbol, timeframe=ct_tf, count=int(count))  # type: ignore
-    # Normalize candles into DataFrame
-    if isinstance(candles, list) and candles:
-        if isinstance(candles[0], dict):
-            # Expect keys like time/open/high/low/close/volume (be permissive)
-            def _get(item, *keys, default=None):
-                for k in keys:
-                    if k in item:
-                        return item[k]
-                return default
-            rows = []
-            for c in candles:
-                t = _get(c, 'time', 'timestamp')
-                o = float(_get(c, 'open', 'o', default=0.0))
-                h = float(_get(c, 'high', 'h', default=0.0))
-                l = float(_get(c, 'low', 'l', default=0.0))
-                cl = float(_get(c, 'close', 'c', default=0.0))
-                v = float(_get(c, 'volume', 'v', default=0.0))
-                rows.append([t, o, h, l, cl, v])
-            df = pd.DataFrame(rows, columns=["timestamp", "open", "high", "low", "close", "volume"])  # type: ignore
-        else:
-            # Assume list format [ts, o, h, l, c, v]
-            df = pd.DataFrame(candles, columns=["timestamp", "open", "high", "low", "close", "volume"])  # type: ignore
-    else:
-        df = pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
-    # Convert timestamp to datetime
-    if not df.empty:
-        # Try ms, then seconds
-        ts = pd.to_datetime(df["timestamp"], unit="ms", errors='ignore')
-        if not isinstance(ts.iloc[0], pd.Timestamp):
-            ts = pd.to_datetime(df["timestamp"], unit="s", errors='coerce')
-        df["timestamp"] = pd.to_datetime(ts)
-        df.set_index("timestamp", inplace=True)
-        df = df.sort_index()
-    return df[["open", "high", "low", "close", "volume"]]
-
-
-def _fetch_online_df(cfg: Dict[str, Any], exchange: str, symbol: str, timeframe: str,
-                     start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
-    # Per user request: use direct libraries with limit/count
-    limit = int(_os.environ.get('BT_LIMIT') or cfg.get('backtest', {}).get('limit', 500))
-    if exchange == 'binance':
-        return _ccxt_binance_df(cfg, symbol, timeframe, limit)
-    if exchange == 'pepperstone':
-        return _ctrader_df(cfg, symbol, timeframe, limit)
-    if exchange == 'kaggle':
-        return _kaggle_df(cfg, symbol, timeframe, start, end)
-    raise ValueError(f"Unknown exchange: {exchange}")
 
 
 def _discover_strategy_names() -> List[str]:
@@ -165,9 +62,9 @@ def _discover_strategy_names() -> List[str]:
 
 def _load_strategies(cfg: Dict[str, Any], strategy_names: Optional[List[str]]) -> List[Any]:
     strategies_cfg = cfg.get("strategies", {})
-    names = strategy_names if strategy_names is not None else _discover_strategy_names()
+    enabled = strategies_cfg.get("enabled", [])
     loaded: List[Any] = []
-    for name in names:
+    for name in enabled:
         module_name = f"app.strategies.{name}"
         class_name = ''.join(part.capitalize() for part in name.split('_')) + "Strategy"
         try:
@@ -235,15 +132,32 @@ class BacktraderBacktester:
         self.bt_cfg = config.get("backtest", {})
         self.risk_cfg = config.get("risk", {})
         self._risk_per_trade = _as_float(self.risk_cfg.get("max_risk_per_trade", 0.01), 0.01)
+        self.data_dir = self.bt_cfg.get("data_dir", "data")
+        self.data_loader = DataLoader(base_dir=self.data_dir)
 
     def run(self, symbol: str, exchange: str, timeframe: str, strategies: Optional[List[str]] = None) -> Dict[str, Any]:
-        # Fetch online data
-        start = pd.to_datetime(self.bt_cfg.get("start_date")) if self.bt_cfg.get("start_date") else pd.Timestamp.utcnow() - pd.Timedelta(days=30)
-        end = pd.to_datetime(self.bt_cfg.get("end_date")) if self.bt_cfg.get("end_date") else pd.Timestamp.utcnow()
-        df = _fetch_online_df(self.cfg, exchange, symbol, timeframe, start, end)
-        if df is None or df.empty:
-            raise ValueError("Failed to fetch online OHLCV for Backtrader")
-        df = df.sort_index()
+        # Set date range
+        start_date = pd.to_datetime(self.bt_cfg.get("start_date")) if self.bt_cfg.get("start_date") else None
+        end_date = pd.to_datetime(self.bt_cfg.get("end_date")) if self.bt_cfg.get("end_date") else None
+        
+        # Load local data
+        try:
+            logger.info(f"Loading local data for {symbol} {timeframe} from {self.data_dir}")
+            df = self.data_loader.load_historical_data(
+                symbol=symbol,
+                timeframe=timeframe,
+                start_date=start_date,
+                end_date=end_date
+            )
+            
+            if df is None or df.empty:
+                raise ValueError(f"No data found for {symbol} {timeframe} in the specified date range")
+                
+            logger.info(f"Loaded {len(df)} rows of data from {df.index[0]} to {df.index[-1]}")
+            
+        except Exception as e:
+            logger.error(f"Error loading local data: {e}")
+            raise
 
         # Backtrader feed
         data = bt.feeds.PandasData(dataname=df)
@@ -256,10 +170,21 @@ class BacktraderBacktester:
             if 'signal' not in sig_df.columns:
                 logger.error(f"Strategy {strat_name} did not return 'signal' column; skipping")
                 continue
-            # Map datetime -> signal (ensure index is datetime)
+            # Map datetime -> signal (ensure index is datetime, align to seconds)
             sig_df = sig_df.copy()
-            sig_df.index = pd.to_datetime(sig_df.index)
-            signals_map = {ts.to_pydatetime(): int(s) for ts, s in sig_df['signal'].fillna(0).items()}
+            sig_df.index = pd.to_datetime(sig_df.index).floor('S')  # descartar nanosegundos
+            # En caso de múltiples señales en el mismo segundo, conservar la última
+            sig_df = sig_df[~sig_df.index.duplicated(keep='last')]
+            sig_series = sig_df['signal'].fillna(0).astype(int)
+            nonzero = int((sig_series != 0).sum())
+            logger.info(f"Signals prepared: total={len(sig_series)}, nonzero={nonzero}")
+            signals_map = {ts.to_pydatetime(): int(s) for ts, s in sig_series.items()}
+
+            # Persistir señales para debug
+            metrics_path = self.bt_cfg.get("metrics_path", "metrics/")
+            os.makedirs(metrics_path, exist_ok=True)
+            base_name = f"{symbol.replace('/', '_')}_{timeframe}_{strat_name}_bt"
+            sig_series.to_csv(os.path.join(metrics_path, f"signals_{base_name}.csv"), header=["signal"]) 
 
             cerebro = bt.Cerebro()
             cerebro.broker.setcash(_as_float(self.cfg.get("global", {}).get("starting_capital", 10_000), 10_000.0))
@@ -382,9 +307,7 @@ class BacktraderBacktester:
             results[strat_name] = summary
 
             # Persist outputs
-            metrics_path = self.bt_cfg.get("metrics_path", "metrics/")
-            os.makedirs(metrics_path, exist_ok=True)
-            base_name = f"{symbol.replace('/', '_')}_{timeframe}_{strat_name}_bt"
+            # metrics_path y base_name ya definidos arriba
             if not eq_series.empty:
                 eq_series.to_csv(os.path.join(metrics_path, f"equity_{base_name}.csv"), header=["equity"])
             save_metrics_csv({k: (v if v is not None else "") for k, v in summary.items()}, os.path.join(metrics_path, f"backtest_{base_name}.csv"))

@@ -7,15 +7,13 @@ exchanges:
   binance:
     api_key: "${BINANCE_API_KEY}"
     api_secret: "${BINANCE_API_SECRET}"
-    testnet: true
-    default_market: "spot"
-  pepperstone:
-    ctrader:
-      access_token: "${CTRADER_ACCESS_TOKEN}"
-      account_id: "${CTRADER_ACCOUNT_ID}"  # numeric
-      environment: "${CTRADER_ENVIRONMENT}"
-      client_id: "${CTRADER_CLIENT_ID}"
-      client_secret: "${CTRADER_CLIENT_SECRET}"
+    testnet: ${BINANCE_TESTNET}
+    default_market: "${BINANCE_DEFAULT_MARKET}"
+  ctrader:
+    account_id: "${CTRADER_ACCOUNT_ID}"  # numeric
+    environment: "${CTRADER_ENVIRONMENT}"
+    client_id: "${CTRADER_CLIENT_ID}"
+    client_secret: "${CTRADER_CLIENT_SECRET}"
 
 indicators:
   ema_fast: ${IND_EMA_FAST}
@@ -28,11 +26,14 @@ indicators:
 
 strategies:
   enabled:
-    - bollinger
+    - adx
   ema_cross:
     fast: ${IND_EMA_FAST}
     slow: ${IND_EMA_SLOW}
     trend: ${IND_EMA_TREND}
+  adx:
+    period: ${IND_ADX_PERIOD}
+    threshold: ${IND_ADX_THRESHOLD}
   bollinger:
     period: ${IND_BB_PERIOD}
     k: ${IND_BB_K}
@@ -58,14 +59,5 @@ backtest:
   commission: ${BT_COMMISSION}
   slippage: ${BT_SLIPPAGE}
   metrics_path: ${BT_METRICS_PATH}
-  kaggle:
-    dataset: "novandraanugrah/xauusd-gold-price-historical-data-2004-2024"
-    file: "XAU_15m_data.csv"
-    time_column: "Date"
-    symbol_column: ""   # o no lo declares si no aplica
-    columns:
-      open: "Open"
-      high: "High"
-      low: "Low"
-      close: "Close"
-      volume: "Volume"
+  default_market: ${BT_DEFAULT_MARKET}
+

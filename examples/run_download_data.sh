@@ -9,8 +9,4 @@ if [[ -f .env ]]; then
 fi
 
 
-python src/main.py \
-  --mode backtest \
-  --config config.yaml \
-  --symbol "BTC/USDT" \
-  --timeframe "5m"
+python -m src.app.utils.data_downloader BTC/USDT ETH/USDT --timeframes 1d 4h 1h
